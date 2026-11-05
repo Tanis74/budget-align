@@ -10,7 +10,7 @@
 :root{
   --bg:#f4f6f9; --card:#ffffff; --ink:#1b2536; --muted:#68758a;
   --line:#e2e8f1; --accent:#2662d9; --accent-ink:#1d4fc0;
-  --soft:#edf2fb; --plus:#137a3d;
+  --soft:#edf2fb; --plus:#137a3d; --neg:#c2410c;
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -30,6 +30,8 @@ h1{font-size:20px;margin:6px 0 2px}
 .topups{display:flex;gap:10px}
 .topups>div{flex:1;background:var(--soft);border-radius:10px;padding:8px 10px;font-size:12.5px;color:var(--muted)}
 .topups b{display:block;font-size:16px;color:var(--ink);margin-top:1px}
+.topups .neg b{color:var(--neg)}
+.overspend{margin-top:6px;font-size:13px;font-weight:600;color:var(--neg)}
 .cat h2{font-size:16px;margin:0}
 .cat-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap}
 .limit{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap}
@@ -64,6 +66,7 @@ details li{margin:3px 0}
     <div class="net-caption" id="netCaption"></div>
     <div class="net" id="netAmount"></div>
     <div class="topups">
+      <div id="overBox">Перерасход за месяц<b id="overspend">нет</b></div>
       <div>Счёт А доплачивает из своих<b id="topA">0 ₽</b></div>
       <div>Счёт Б доплачивает из своих<b id="topB">0 ₽</b></div>
     </div>
@@ -77,6 +80,7 @@ details li{margin:3px 0}
       <li>В каждой категории остатки двух счетов складываются и делятся пополам: у кого больше — переводит половину разницы. Если сумма нечётная, лишний рубль достаётся тому, у кого было меньше.</li>
       <li>Продукты и еда вне дома после выравнивания дополняются каждым до лимита из своих денег.</li>
       <li>Развлечения: после выравнивания каждому начисляется пополнение (по умолчанию 5 000 ₽) независимо от остатка — не потраченное копится.</li>
+      <li>Перерасход за месяц: в каждой категории остатки А и Б складываются, и если сумма ниже нуля — это перерасход категории; общий — сумма таких минусов. Плюс в одной категории не погашает минус в другой, а не потраченные развлечения — накопление, не экономия.</li>
       <li>Пустое поле считается нулём. Допускаются отрицательные значения (перерасход). Суммы — в целых рублях.</li>
     </ul>
   </details>
@@ -110,6 +114,11 @@ function calcCategory(a, b, limit, mode) {
   const top = x => (mode === "add" ? limit : Math.max(0, limit - x));
   const tA = top(eq.eqA), tB = top(eq.eqB);
   return { eqA: eq.eqA, eqB: eq.eqB, amount: eq.amount, dir: eq.dir, tA, tB, fA: eq.eqA + tA, fB: eq.eqB + tB };
+}
+
+// Перерасход категории: суммарный остаток ниже нуля (плюс соседней категории его не погашает).
+function categoryDeficit(a, b) {
+  return a + b < 0 ? -(a + b) : 0;
 }
 
 /* --- DOM --- */
@@ -158,7 +167,8 @@ const state = CATS.map(cat => {
       </div>
       <div class="flow"></div>
     </div>
-    <div class="transfer"></div>`;
+    <div class="transfer"></div>
+    <div class="overspend" hidden></div>`;
   catsEl.appendChild(sec);
   return {
     ...cat, sec,
@@ -166,6 +176,7 @@ const state = CATS.map(cat => {
     bals: { A: sec.querySelectorAll(".bal")[0], B: sec.querySelectorAll(".bal")[1] },
     flows: { A: sec.querySelectorAll(".flow")[0], B: sec.querySelectorAll(".flow")[1] },
     transferEl: sec.querySelector(".transfer"),
+    overEl: sec.querySelector(".overspend"),
   };
 });
 
@@ -178,7 +189,7 @@ function flowLine(orig, eq, top, final, mode) {
 }
 
 function recalc() {
-  let net = 0, topA = 0, topB = 0;
+  let net = 0, topA = 0, topB = 0, overspend = 0;
   for (const st of state) {
     const a = readNum(st.bals.A), b = readNum(st.bals.B);
     const limit = Math.max(0, readNum(st.limitInput));
@@ -194,6 +205,11 @@ function recalc() {
       st.transferEl.className = "transfer none";
       st.transferEl.textContent = "Выравнивание не требуется";
     }
+
+    const deficit = categoryDeficit(a, b);
+    overspend += deficit;
+    st.overEl.hidden = deficit === 0;
+    st.overEl.textContent = `Перерасход: ${fmt(deficit)} ₽`;
 
     if (r.dir === "a2b") net += r.amount;
     else if (r.dir === "b2a") net -= r.amount;
@@ -212,6 +228,8 @@ function recalc() {
     caption.textContent = "Нетто-перевод";
     amount.innerHTML = `<span class="zero">не нужен — всё ровно</span>`;
   }
+  document.getElementById("overspend").textContent = overspend > 0 ? `${fmt(overspend)} ₽` : "нет";
+  document.getElementById("overBox").classList.toggle("neg", overspend > 0);
   document.getElementById("topA").textContent = `${fmt(topA)} ₽`;
   document.getElementById("topB").textContent = `${fmt(topB)} ₽`;
 }
