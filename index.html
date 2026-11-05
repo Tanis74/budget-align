@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Выравнивание бюджета</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%E2%86%84%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#f4f6f9; --card:#ffffff; --ink:#1b2536; --muted:#68758a;
+  --line:#e2e8f1; --accent:#2662d9; --accent-ink:#1d4fc0;
+  --soft:#edf2fb; --plus:#137a3d;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; padding:14px 12px 56px;
+  font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  background:var(--bg); color:var(--ink);
+}
+.wrap{max-width:620px;margin:0 auto}
+h1{font-size:20px;margin:6px 0 2px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.summary{position:sticky;top:8px;z-index:5;box-shadow:0 6px 18px rgba(20,35,70,.12)}
+.net-caption{font-size:13px;color:var(--muted)}
+.net{font-size:26px;font-weight:700;margin:2px 0 10px}
+.net .zero{font-size:18px;color:var(--muted);font-weight:600}
+.topups{display:flex;gap:10px}
+.topups>div{flex:1;background:var(--soft);border-radius:10px;padding:8px 10px;font-size:12.5px;color:var(--muted)}
+.topups b{display:block;font-size:16px;color:var(--ink);margin-top:1px}
+.cat h2{font-size:16px;margin:0}
+.cat-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.limit{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap}
+.party{padding:9px 0;border-top:1px dashed var(--line)}
+.party-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.party-name{font-weight:600;font-size:14px}
+.flow{margin-top:6px;font-size:13.5px;color:var(--muted)}
+.flow b{color:var(--ink)}
+.flow .plus{color:var(--plus);font-weight:600}
+input.num{
+  width:122px;padding:8px 10px;font:inherit;font-size:16px;text-align:right;
+  border:1px solid var(--line);border-radius:10px;background:#fbfcfe;color:var(--ink);
+}
+input.num:focus{outline:2px solid var(--accent);outline-offset:0;border-color:var(--accent)}
+input.num.bad{border-color:#d92d20;background:#fff6f5}
+input.num::-webkit-outer-spin-button,input.num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+input.num{-moz-appearance:textfield;appearance:textfield}
+.limit input.num{width:92px;font-size:14px;padding:6px 8px}
+.transfer{margin-top:10px;padding:8px 10px;border-radius:10px;background:var(--soft);font-size:14px;font-weight:600}
+.transfer.none{background:transparent;color:var(--muted);font-weight:400;padding-left:0}
+details{margin-top:4px;color:var(--muted);font-size:13.5px}
+details summary{cursor:pointer;color:var(--ink);font-weight:600;font-size:14px;margin-bottom:6px}
+details li{margin:3px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Выравнивание бюджета</h1>
+  <p class="sub">Введите остатки на счетах А и Б по каждой категории — страница посчитает выравнивающие переводы и пополнения.</p>
+
+  <section class="card summary" aria-live="polite">
+    <div class="net-caption" id="netCaption"></div>
+    <div class="net" id="netAmount"></div>
+    <div class="topups">
+      <div>Счёт А доплачивает из своих<b id="topA">0 ₽</b></div>
+      <div>Счёт Б доплачивает из своих<b id="topB">0 ₽</b></div>
+    </div>
+  </section>
+
+  <div id="cats"></div>
+
+  <details>
+    <summary>Как считаем</summary>
+    <ul>
+      <li>В каждой категории остатки двух счетов складываются и делятся пополам: у кого больше — переводит половину разницы. Если сумма нечётная, лишний рубль достаётся тому, у кого было меньше.</li>
+      <li>Продукты и еда вне дома после выравнивания дополняются каждым до лимита из своих денег.</li>
+      <li>Развлечения: после выравнивания каждому начисляется пополнение (по умолчанию 5 000 ₽) независимо от остатка — не потраченное копится.</li>
+      <li>Пустое поле считается нулём. Допускаются отрицательные значения (перерасход). Суммы — в целых рублях.</li>
+    </ul>
+  </details>
+</div>
+
+<script>
+"use strict";
+
+/* --- чистая логика (проверяется тестами) --- */
+
+function parseAmount(raw) {
+  const s = String(raw).replace(/\s+/g, "").replace(",", ".");
+  if (/^-?\d+$/.test(s)) return parseInt(s, 10);
+  return null; // пусто или не целое число
+}
+
+// Выравнивание: richer -> poorer, нечётный рубль бедняку.
+function equalize(a, b) {
+  if (a === b) return { eqA: a, eqB: b, amount: 0, dir: null };
+  const total = a + b;
+  const eqRich = Math.floor(total / 2);
+  const eqPoor = Math.ceil(total / 2);
+  return a > b
+    ? { eqA: eqRich, eqB: eqPoor, amount: a - eqRich, dir: "a2b" }
+    : { eqA: eqPoor, eqB: eqRich, amount: b - eqRich, dir: "b2a" };
+}
+
+// mode "fill" — дополнить каждому до лимита; mode "add" — добавить лимит каждому безусловно.
+function calcCategory(a, b, limit, mode) {
+  const eq = equalize(a, b);
+  const top = x => (mode === "add" ? limit : Math.max(0, limit - x));
+  const tA = top(eq.eqA), tB = top(eq.eqB);
+  return { eqA: eq.eqA, eqB: eq.eqB, amount: eq.amount, dir: eq.dir, tA, tB, fA: eq.eqA + tA, fB: eq.eqB + tB };
+}
+
+/* --- DOM --- */
+
+const FMT = new Intl.NumberFormat("ru-RU");
+const fmt = n => FMT.format(n);
+const fmtSign = n => (n < 0 ? "\u2212" : "") + FMT.format(Math.abs(n));
+
+const CATS = [
+  { id: "prod", name: "Продукты",     limit: 20000, mode: "fill", limitLabel: "лимит" },
+  { id: "eat",  name: "Еда вне дома", limit: 10000, mode: "fill", limitLabel: "лимит" },
+  { id: "fun",  name: "Развлечения",  limit: 5000,  mode: "add",  limitLabel: "+ каждому" },
+];
+
+function readNum(input) {
+  const v = parseAmount(input.value);
+  input.classList.toggle("bad", v === null && input.value.trim() !== "");
+  return v === null ? 0 : v;
+}
+
+const catsEl = document.getElementById("cats");
+const state = CATS.map(cat => {
+  const sec = document.createElement("section");
+  sec.className = "card cat";
+  sec.innerHTML = `
+    <div class="cat-head">
+      <h2>${cat.name}</h2>
+      <label class="limit">${cat.limitLabel}
+        <input class="num" type="number" step="1" inputmode="numeric" value="${cat.limit}"
+               aria-label="${cat.name}: ${cat.limitLabel}">
+      </label>
+    </div>
+    <div class="party">
+      <div class="party-top">
+        <div class="party-name">Счёт А</div>
+        <input class="num bal" type="number" step="1" inputmode="numeric" placeholder="0"
+               aria-label="Счёт А: ${cat.name}">
+      </div>
+      <div class="flow"></div>
+    </div>
+    <div class="party">
+      <div class="party-top">
+        <div class="party-name">Счёт Б</div>
+        <input class="num bal" type="number" step="1" inputmode="numeric" placeholder="0"
+               aria-label="Счёт Б: ${cat.name}">
+      </div>
+      <div class="flow"></div>
+    </div>
+    <div class="transfer"></div>`;
+  catsEl.appendChild(sec);
+  return {
+    ...cat, sec,
+    limitInput: sec.querySelector(".limit input"),
+    bals: { A: sec.querySelectorAll(".bal")[0], B: sec.querySelectorAll(".bal")[1] },
+    flows: { A: sec.querySelectorAll(".flow")[0], B: sec.querySelectorAll(".flow")[1] },
+    transferEl: sec.querySelector(".transfer"),
+  };
+});
+
+function flowLine(orig, eq, top, final, mode) {
+  const parts = [];
+  if (eq !== orig) parts.push(`вырав. <b>${fmtSign(eq)}</b>`);
+  if (top > 0) parts.push(`${mode === "add" ? "пополнение" : "доплата"} <span class="plus">+${fmt(top)}</span>`);
+  parts.push(`итог <b>${fmtSign(final)} ₽</b>`);
+  return parts.join(" &middot; ");
+}
+
+function recalc() {
+  let net = 0, topA = 0, topB = 0;
+  for (const st of state) {
+    const a = readNum(st.bals.A), b = readNum(st.bals.B);
+    const limit = Math.max(0, readNum(st.limitInput));
+    const r = calcCategory(a, b, limit, st.mode);
+
+    st.flows.A.innerHTML = flowLine(a, r.eqA, r.tA, r.fA, st.mode);
+    st.flows.B.innerHTML = flowLine(b, r.eqB, r.tB, r.fB, st.mode);
+
+    if (r.amount > 0) {
+      st.transferEl.className = "transfer";
+      st.transferEl.textContent = `Перевод: Счёт ${r.dir === "a2b" ? "А \u2192 Б" : "Б \u2192 А"} \u00B7 ${fmt(r.amount)} ₽`;
+    } else {
+      st.transferEl.className = "transfer none";
+      st.transferEl.textContent = "Выравнивание не требуется";
+    }
+
+    if (r.dir === "a2b") net += r.amount;
+    else if (r.dir === "b2a") net -= r.amount;
+    topA += r.tA; topB += r.tB;
+  }
+
+  const caption = document.getElementById("netCaption");
+  const amount = document.getElementById("netAmount");
+  if (net > 0) {
+    caption.textContent = "Нетто-перевод: Счёт А → Счёт Б";
+    amount.innerHTML = `${fmt(net)} ₽`;
+  } else if (net < 0) {
+    caption.textContent = "Нетто-перевод: Счёт Б → Счёт А";
+    amount.innerHTML = `${fmt(-net)} ₽`;
+  } else {
+    caption.textContent = "Нетто-перевод";
+    amount.innerHTML = `<span class="zero">не нужен — всё ровно</span>`;
+  }
+  document.getElementById("topA").textContent = `${fmt(topA)} ₽`;
+  document.getElementById("topB").textContent = `${fmt(topB)} ₽`;
+}
+
+for (const st of state) {
+  st.limitInput.addEventListener("input", recalc);
+  st.bals.A.addEventListener("input", recalc);
+  st.bals.B.addEventListener("input", recalc);
+}
+recalc();
+</script>
+</body>
+</html>
